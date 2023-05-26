@@ -9,10 +9,10 @@
 
 
 // GPIO config
-#define RX_PORT GPIOB
-#define RX_PIN	13
-#define TX_PORT GPIOB
-#define TX_PIN	12
+#define RX_PORT GPIOA
+#define RX_PIN	0
+#define TX_PORT GPIOA
+#define TX_PIN	1
 // UART config
 #define BAUD			9600
 #define OVERSAMPLING	16
@@ -80,7 +80,7 @@ int main(void) {
 
 	// TIM
 	uint32_t rx_psc = (100000000 / (BAUD * OVERSAMPLING - 1));
-	uint32_t tx_psc = (100000000 / (BAUD - 1));
+	uint32_t tx_psc = (50000000 / (BAUD - 1));
 	config_TIM(TIM1, rx_psc, 1);
 	config_TIM(TIM2, tx_psc, 1);
 	start_TIM_update_irq(TIM1);
