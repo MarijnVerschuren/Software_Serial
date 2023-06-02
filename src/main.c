@@ -64,13 +64,13 @@ extern void EXTI9_5_IRQHandler() {
 extern void TIM1_UP_TIM10_IRQHandler() {
 	TIM10->SR &= ~TIM_SR_UIF;
 	if (!rx_state.started) { return; }
-	rx_state.transfer_complete = rx_state.cnt == rx_state.data_bits;
 	if (rx_state.cnt <= rx_state.data_bits) {
 		rx_state.cnt++;
 		rx_state.data >>= 1;
 		rx_state.data |= GPIO_read(RX_PORT, RX_PIN) << 7;
 	} else {
-		rx_state.framing_error = !GPIO_read(RX_PORT, RX_PIN);
+		rx_state.transfer_complete = GPIO_read(RX_PORT, RX_PIN);
+		rx_state.framing_error = !rx_state.transfer_complete;
 		rx_state.started = rx_state.cnt = 0;  // reset state
 		GPIO_write(DBA_PORT, DBA_PIN, 0);
 		if (rx_state.framing_error) { return; }
@@ -82,19 +82,15 @@ extern void TIM1_UP_TIM10_IRQHandler() {
 void SUART_write(const uint8_t* buffer, uint32_t size) {
 	uint16_t uart_tick = TIM1->CNT; uint8_t j;
 	for (uint32_t i = 0; i < size; i++) {
-		while (uart_tick == TIM1->CNT);
-		uart_tick = TIM1->CNT;
+		while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
 		GPIO_write(TX_PORT, TX_PIN, 0);  // start bit
 		for (j = 0; j < 8; j++) {
-			while (uart_tick == TIM1->CNT);
-			uart_tick = TIM1->CNT;
+			while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
 			GPIO_write(TX_PORT, TX_PIN, (buffer[i] >> j) & 0b1);
 		}
-		while (uart_tick == TIM1->CNT);
-		uart_tick = TIM1->CNT;
+		while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
 		GPIO_write(TX_PORT, TX_PIN, 1);  // stop bit
-		while (TIM1->CNT - uart_tick < 3);
-		uart_tick = TIM1->CNT;
+		while (TIM1->CNT - uart_tick < 3); uart_tick = TIM1->CNT;
 	}
 }
 
@@ -110,8 +106,8 @@ int main(void) {
 	// GPIO
 	fconfig_GPIO(RX_PORT, RX_PIN, GPIO_input, GPIO_no_pull, GPIO_push_pull, GPIO_very_high_speed, 0);
 	fconfig_GPIO(TX_PORT, TX_PIN, GPIO_output, GPIO_no_pull, GPIO_push_pull, GPIO_very_high_speed, 0);
+	// debug pin outputting 'rx_state.started'
 	fconfig_GPIO(DBA_PORT, DBA_PIN, GPIO_output, GPIO_no_pull, GPIO_push_pull, GPIO_very_high_speed, 0);
-	GPIO_write(TX_PORT, TX_PIN, 1);  // let the line be floating
 
 	// EXTI
 	config_EXTI(RX_PIN, RX_PORT, 1, 0);
@@ -119,10 +115,9 @@ int main(void) {
 	// TIM
 	tx_psc = (APB2_clock_frequency / (BAUD + 1));
 	rx_psc = (APB2_clock_frequency / (BAUD * 2 + 1));
-	// https://www.deeptronic.com/software-design/writing-simple-software-serial-function-in-arduino/
 	config_TIM(TIM1, tx_psc, 0xffff);
 	start_TIM(TIM1);  // start TX timer
-	config_TIM(TIM10, rx_psc, 1);
+	config_TIM(TIM10, rx_psc, 1);  // RX timer (started when SUART_start_receive is called)
 	start_TIM_update_irq(TIM10);  // TIM1_UP_TIM10_IRQHandler
 
 	// software serial
@@ -132,26 +127,25 @@ int main(void) {
 	rx_state.data_bits = 8;
 
 	// main loop
-	const uint8_t* message = "hello world!\n";
-	uint8_t message_length = 13;
 	SUART_start_receive(rx_buffer);
 	for (;;) {
-		//while (tick - start < 10); start = tick;
-		//SUART_write(message, message_length);
-		//SUART_read_until(&rx_ptr, 100, 0x0A);
 		if (rx_state.transfer_complete) {
 			SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
 		}
-		__NOP();  // 891a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121a0a121afc
 	}
 
-	// | baud	| OS  | sample_freq	|
-	// |--------|-----|-------------|
-	// | 9600	| x16 | 153600		|
-	// | 38400	| x16 | 614400		|
-	// | 115200	| x16 | 1843200		|
-	// | 230400	| x8  | 1843200		|
-	// | 460800	| x8  | 3686400		|
-	// | 576000	| x8  | 4608000		|
-	// | 921600	| x8  | 7372800		|
+	// | mode | blocking | interrupt |
+	// |------|----------|-----------|
+	// | TX   | x        | 0         |
+	// | RX   | 0        | x         |
+
+	// | baud	| TX | RX |
+	// |--------|----|----|
+	// | 9600	| x  | x  |
+	// | 38400	| x  | 0  |
+	// | 115200	| x  | 0  |
+	// | 230400	| x  | 0  |
+	// | 460800	| x  | 0  |
+	// | 576000	| x  | 0  |
+	// | 921600	| x  | 0  |
 }
