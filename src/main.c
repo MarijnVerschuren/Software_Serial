@@ -17,11 +17,13 @@
 #define DBA_PIN	4
 // UART config
 //#define BAUD			921600
-// #define BAUD			460800
+//#define BAUD			576000
+//#define BAUD			460800
+//#define BAUD			230400
 //#define BAUD			115200
-#define BAUD			9600
-#define OVERSAMPLING	16
-#define DATA_BITS		8
+#define BAUD			38400
+//#define BAUD			9600
+#define RECEIVE
 
 
 uint32_t tx_psc;
@@ -127,12 +129,20 @@ int main(void) {
 	rx_state.data_bits = 8;
 
 	// main loop
+	#ifdef RECEIVE
 	SUART_start_receive(rx_buffer);
 	for (;;) {
 		if (rx_state.transfer_complete) {
 			SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
 		}
 	}
+	#else
+	const uint8_t* msg = "hello world!\n";
+	const uint32_t msg_len = 14;
+	for (;;) {
+		SUART_write(msg, msg_len);
+	}
+	#endif
 
 	// | mode | blocking | interrupt |
 	// |------|----------|-----------|
@@ -141,11 +151,11 @@ int main(void) {
 
 	// | baud	| TX | RX |
 	// |--------|----|----|
-	// | 9600	| x  | x  |
-	// | 38400	| x  | 0  |
-	// | 115200	| x  | 0  |
-	// | 230400	| x  | 0  |
-	// | 460800	| x  | 0  |
-	// | 576000	| x  | 0  |
-	// | 921600	| x  | 0  |
+	// | 9600   | x  | x  |
+	// | 38400  | x  | 0  |
+	// | 115200 | x  | 0  |
+	// | 230400 | x  | 0  |
+	// | 460800 | x  | 0  |
+	// | 576000 | x  | 0  |
+	// | 921600 | x  | 0  |
 }
