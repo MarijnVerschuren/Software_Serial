@@ -8,22 +8,29 @@
 #include "tim.h"
 #include "sys.h"
 
-// GPIO config
-#define RX_PORT GPIOA
-#define RX_PIN	5
-#define TX_PORT GPIOA
-#define TX_PIN	6
-#define DBA_PORT GPIOA
-#define DBA_PIN	4
+// software serial config
+#define RECEIVE
+#ifdef RECEIVE
+#define RX_PORT GPIOB
+#define RX_PIN	10
+#define TX_PORT GPIOB
+#define TX_PIN	2
+#else
+#define RX_PORT GPIOB
+#define RX_PIN	2
+#define TX_PORT GPIOB
+#define TX_PIN	10
+#endif
+#define DBA_PORT GPIOB
+#define DBA_PIN	1
 // UART config
 //#define BAUD			921600
 //#define BAUD			576000
 //#define BAUD			460800
 //#define BAUD			230400
-//#define BAUD			115200
-#define BAUD			38400
+#define BAUD			115200
+//#define BAUD			38400
 //#define BAUD			9600
-#define RECEIVE
 
 
 uint32_t tx_psc;
@@ -33,15 +40,15 @@ io_buffer_t* rx_buffer;
 struct {
 	io_buffer_t* buffer;
 	// settings
-	uint8_t parity : 2;  // none(= 0,1), odd, even
-	uint8_t stop_bits: 1;  // 1 + x
-	uint8_t data_bits: 4;  // (5 - 9)
+	volatile uint8_t parity : 2;  // none(= 0,1), odd, even
+	volatile uint8_t stop_bits: 1;  // 1 + x
+	volatile uint8_t data_bits: 4;  // (5 - 9)
 	// state
-	uint8_t started : 1;
-	uint16_t framing_error : 1;
-	uint16_t transfer_complete : 1;
-	uint16_t data : 10;
-	uint16_t cnt : 4;
+	volatile uint8_t started : 1;
+	volatile uint16_t framing_error : 1;
+	volatile uint16_t transfer_complete : 1;
+	volatile uint16_t data : 10;
+	volatile uint16_t cnt : 4;
 } rx_state;
 
 
@@ -57,8 +64,13 @@ void SUART_stop_receive() {
 	start_EXTI(RX_PIN);
 	start_TIM(TIM10);
 }
-extern void EXTI9_5_IRQHandler() {
-	EXTI->PR = EXTI_PR_PR5;
+#ifdef RECEIVE
+extern void EXTI15_10_IRQHandler() {
+	EXTI->PR = EXTI_PR_PR10;
+#else
+extern void EXTI2_IRQHandler() {
+	EXTI->PR = EXTI_PR_PR2;
+#endif
 	GPIO_write(DBA_PORT, DBA_PIN, 1);
 	rx_state.transfer_complete = 0;
 	rx_state.started = 1;
@@ -152,9 +164,9 @@ int main(void) {
 	// | baud	| TX | RX |
 	// |--------|----|----|
 	// | 9600   | x  | x  |
-	// | 38400  | x  | 0  |
-	// | 115200 | x  | 0  |
-	// | 230400 | x  | 0  |
+	// | 38400  | x  | x  |
+	// | 115200 | x  | x  |
+	// | 230400 | x  | -  |  // RX errors start being a problem at this speed
 	// | 460800 | x  | 0  |
 	// | 576000 | x  | 0  |
 	// | 921600 | x  | 0  |
