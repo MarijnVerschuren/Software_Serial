@@ -8,6 +8,8 @@
 #include "tim.h"
 #include "sys.h"
 
+#include <string.h>
+
 // software serial config
 #define RECEIVE
 #ifdef RECEIVE
@@ -126,7 +128,7 @@ int main(void) {
 	// EXTI
 	config_EXTI(RX_PIN, RX_PORT, 1, 0);
 
-	// TIM
+	// TIMrx_psc, 1);
 	tx_psc = (APB2_clock_frequency / (BAUD + 1));
 	rx_psc = (APB2_clock_frequency / (BAUD * 2 + 1));
 	config_TIM(TIM1, tx_psc, 0xffff);
@@ -143,9 +145,51 @@ int main(void) {
 	// main loop
 	#ifdef RECEIVE
 	SUART_start_receive(rx_buffer);
+	const uint8_t* menu =
+			"Options\n\r"\
+		" - D: display digital pins A0 - B15\n\r"\
+		" - S: display the system clock-speed\n\r"\
+		" - C: clear screen and exit\n\r";
+
+	const uint8_t* hex = "0123456789ABCDEF";
+	const uint8_t* dec = "0123456789";
+
+	const uint8_t* digital_message = "pins A0-B15: ";
+	const uint8_t* speed_message = "system clock speed: ";
+	const uint8_t* invalid_message = "invalid option\n\r";
+	uint8_t* str_buffer = malloc(150);
+	uint8_t len;
+
+	uint32_t freq;
 	for (;;) {
 		if (rx_state.transfer_complete) {
-			SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
+			memset(str_buffer, 0x00, 150);
+			switch (*((char*)(rx_buffer->ptr + rx_buffer->i - 1))) {
+				case 'D':
+					len = strlen(digital_message);
+					memcpy(str_buffer, digital_message, len);
+					for (uint8_t i = 0; i < 8; i++) { str_buffer[len] = hex[GPIOA->ODR >> (28 - (i << 2)) & 0xful]; len++; }
+					str_buffer[len] = ' '; len++;
+					for (uint8_t i = 0; i < 8; i++) { str_buffer[len] = hex[GPIOB->ODR >> (28 - (i << 2)) & 0xful]; len++; }
+					str_buffer[len] = '\n'; len++; str_buffer[len] = '\r';
+					SUART_write(str_buffer, strlen(str_buffer));
+					break;
+				case 'S':
+					len = strlen(speed_message);
+					memcpy(str_buffer, speed_message, len);
+					freq = SYS_clock_frequency;
+					while (freq) { str_buffer[len] = dec[freq % 10]; len++; freq /= 10;	}
+					str_buffer[len] = '\n'; len++; str_buffer[len] = '\r';
+					SUART_write(str_buffer, strlen(str_buffer));
+					break;
+				case 'C':
+					break;
+				default:
+					SUART_write(menu, strlen(menu));
+					break;
+			}
+			//SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
+			rx_state.transfer_complete = 0;
 		}
 	}
 	#else
@@ -171,3 +215,5 @@ int main(void) {
 	// | 576000 | x  | 0  |
 	// | 921600 | x  | 0  |
 }
+// TODO: store entire frame when receiving
+// TODO: prepare frames when transmitting
