@@ -11,7 +11,7 @@
 #include <string.h>
 
 // software serial config
-#define RECEIVE
+//#define RECEIVE
 #ifdef RECEIVE
 #define RX_PORT GPIOB
 #define RX_PIN	10
@@ -30,9 +30,9 @@
 //#define BAUD			576000
 //#define BAUD			460800
 //#define BAUD			230400
-#define BAUD			115200
+//#define BAUD			115200
 //#define BAUD			38400
-//#define BAUD			9600
+#define BAUD			9600
 
 
 uint32_t tx_psc;
@@ -40,31 +40,48 @@ uint32_t rx_psc;
 io_buffer_t* rx_buffer;
 
 struct {
+	uint16_t parity			: 1;	// even (0), odd (1)
+	uint16_t parity_enable	: 1;	// send out parity bit if set
+	uint16_t dual_stop_bit	: 1;	// enable second stop bit
+	uint16_t data_bits		: 5;	// (normally: 5 - 9) (1 is added afterwards)
+	uint16_t frame_size		: 8;	// total frame size
+} settings;
+struct {
 	io_buffer_t* buffer;
-	// settings
-	volatile uint8_t parity : 2;  // none(= 0,1), odd, even
-	volatile uint8_t stop_bits: 1;  // 1 + x
-	volatile uint8_t data_bits: 4;  // (5 - 9)
 	// state
-	volatile uint8_t started : 1;
-	volatile uint16_t framing_error : 1;
-	volatile uint16_t transfer_complete : 1;
-	volatile uint16_t data : 10;
-	volatile uint16_t cnt : 4;
-} rx_state;
+	volatile uint32_t data;  // GCC wide-char is 4 bytes
+	// transmission state
+	volatile uint16_t cnt				: 5;
+	volatile uint16_t started			: 1;
+	volatile uint16_t rec_parity		: 1;
+	volatile uint16_t rec_dual_stop		: 1;
+	// frame state
+	volatile uint16_t parity			: 1;
+	volatile uint16_t framing_error		: 1;
+	volatile uint16_t parity_error		: 1;
+	uint16_t _							: 5;
+} state;
+
 
 
 // RX
 void SUART_start_receive(io_buffer_t* buffer) {
 	start_EXTI(RX_PIN);
 	start_TIM(TIM10);
-	rx_state.buffer = buffer;
-	rx_state.started = 0;
-	rx_state.cnt = 0;
+	state.buffer = buffer;
+	state.started = 0;
+	state.cnt = 0;
 }
 void SUART_stop_receive() {
 	start_EXTI(RX_PIN);
 	start_TIM(TIM10);
+}
+void SUART_transfer_complete(void) {
+	if (state.framing_error) { return; }  // TODO: handle
+	for (uint8_t i = 0; i < 4; i++) {
+		((uint8_t*)state.buffer->ptr)[state.buffer->i] = ((uint8_t*)&state.data)[i];
+		state.buffer->i = (state.buffer->i + 1) % state.buffer->size;
+	}
 }
 #ifdef RECEIVE
 extern void EXTI15_10_IRQHandler() {
@@ -74,38 +91,57 @@ extern void EXTI2_IRQHandler() {
 	EXTI->PR = EXTI_PR_PR2;
 #endif
 	GPIO_write(DBA_PORT, DBA_PIN, 1);
-	rx_state.transfer_complete = 0;
-	rx_state.started = 1;
+	state.started = 1;
 }
 extern void TIM1_UP_TIM10_IRQHandler() {
+	// TODO: capture entire frame and process it later
+	// (or try to do it the old way which is more memory efficient)
 	TIM10->SR &= ~TIM_SR_UIF;
-	if (!rx_state.started) { return; }
-	if (rx_state.cnt <= rx_state.data_bits) {
-		rx_state.cnt++;
-		rx_state.data >>= 1;
-		rx_state.data |= GPIO_read(RX_PORT, RX_PIN) << 7;
+	if (!state.started) { return; }
+	if (state.cnt < (settings.data_bits + 1)) {
+		if (!state.cnt) { state.parity = settings.parity; }  // reset parity before starting
+		state.cnt++; state.data >>= 1;
+		uint8_t d = GPIO_read(RX_PORT, RX_PIN);
+		state.data |= d << settings.data_bits;
+		state.parity ^= d;
+	} else if (settings.parity_enable && !state.rec_parity) {
+		state.parity_error = state.parity != GPIO_read(RX_PORT, RX_PIN);
+		state.rec_parity = 1;
+	} else if (settings.dual_stop_bit && !state.rec_dual_stop) {
+		state.framing_error = !GPIO_read(RX_PORT, RX_PIN);
+		state.rec_dual_stop = 1;
 	} else {
-		rx_state.transfer_complete = GPIO_read(RX_PORT, RX_PIN);
-		rx_state.framing_error = !rx_state.transfer_complete;
-		rx_state.started = rx_state.cnt = 0;  // reset state
-		GPIO_write(DBA_PORT, DBA_PIN, 0);
-		if (rx_state.framing_error) { return; }
-		((uint8_t*)rx_state.buffer->ptr)[rx_state.buffer->i] = rx_state.data;
-		rx_state.buffer->i = (rx_state.buffer->i + 1) % rx_state.buffer->size;
+		// reset transmission state variables
+		state.framing_error |= !GPIO_read(RX_PORT, RX_PIN);
+		state.started = state.cnt = 0;
+		state.rec_parity = state.rec_dual_stop = 0;
+
+		GPIO_write(DBA_PORT, DBA_PIN, 0);  // TODO: remove
+		SUART_transfer_complete();
 	}
 }
 // TX (up to 921600 baud)
-void SUART_write(const uint8_t* buffer, uint32_t size) {
-	uint16_t uart_tick = TIM1->CNT; uint8_t j;
+void SUART_write(const uint32_t* buffer, uint32_t size) {
+	uint16_t uart_tick = TIM1->CNT; uint8_t j, d, p;
 	for (uint32_t i = 0; i < size; i++) {
+		p = settings.parity;  // reset parity
 		while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
 		GPIO_write(TX_PORT, TX_PIN, 0);  // start bit
-		for (j = 0; j < 8; j++) {
+		for (j = 0; j < settings.data_bits + 1; j++) {
 			while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
-			GPIO_write(TX_PORT, TX_PIN, (buffer[i] >> j) & 0b1);
+			d = (buffer[i] >> j) & 0b1u; p ^= d;
+			GPIO_write(TX_PORT, TX_PIN, d & 0b1u);
+		}
+		if (settings.parity_enable) {
+			while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
+			GPIO_write(TX_PORT, TX_PIN, p);  // parity
 		}
 		while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
 		GPIO_write(TX_PORT, TX_PIN, 1);  // stop bit
+		if (settings.dual_stop_bit) {
+			while (uart_tick == TIM1->CNT); uart_tick = TIM1->CNT;
+			GPIO_write(TX_PORT, TX_PIN, 1);  // dual stop bit
+		}
 		while (TIM1->CNT - uart_tick < 3); uart_tick = TIM1->CNT;
 	}
 }
@@ -138,9 +174,11 @@ int main(void) {
 
 	// software serial
 	rx_buffer = new_buffer(100);
-	rx_state.parity = 0;
-	rx_state.stop_bits = 0;
-	rx_state.data_bits = 8;
+	settings.parity = 0;
+	settings.parity_enable = 1;
+	settings.dual_stop_bit = 1;
+	settings.data_bits = 8;  // 9 data bits
+	settings.frame_size = settings.data_bits + 1 + settings.dual_stop_bit + 1 + settings.parity_enable;
 
 	// main loop
 	#ifdef RECEIVE
@@ -162,7 +200,7 @@ int main(void) {
 
 	uint32_t freq;
 	for (;;) {
-		if (rx_state.transfer_complete) {
+		if (state.transfer_complete) {
 			memset(str_buffer, 0x00, 150);
 			switch (*((char*)(rx_buffer->ptr + rx_buffer->i - 1))) {
 				case 'D':
@@ -189,11 +227,11 @@ int main(void) {
 					break;
 			}
 			//SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
-			rx_state.transfer_complete = 0;
+			state.transfer_complete = 0;
 		}
 	}
 	#else
-	const uint8_t* msg = "hello world!\n";
+	const uint32_t* msg = L"hello world!\n";
 	const uint32_t msg_len = 14;
 	for (;;) {
 		SUART_write(msg, msg_len);
@@ -215,5 +253,3 @@ int main(void) {
 	// | 576000 | x  | 0  |
 	// | 921600 | x  | 0  |
 }
-// TODO: store entire frame when receiving
-// TODO: prepare frames when transmitting
