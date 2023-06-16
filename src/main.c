@@ -29,11 +29,11 @@
 // UART config
 //#define BAUD			921600
 //#define BAUD			576000
-//#define BAUD			460800
+#define BAUD			460800
 //#define BAUD			230400
 //#define BAUD			115200
 //#define BAUD			38400
-#define BAUD			9600
+//#define BAUD			9600
 
 
 uint32_t tx_psc;
@@ -63,10 +63,6 @@ struct {
 	uint16_t _							: 4;
 } state;
 volatile uint64_t dbg_frame;
-
-
-const uint32_t* msg = L"hello world!\n";
-const uint32_t msg_len = 14;
 
 
 // RX
@@ -240,6 +236,8 @@ int main(void) {
 	}
 	#else
 	SUART_start_receive(rx_buffer);
+	const uint32_t* msg = L"hello world!\n";
+	const uint32_t msg_len = 14;
 	for (;;) {
 		//SUART_write(msg, 1);  // only send 'h'
 		SUART_write(msg, msg_len);
@@ -256,8 +254,8 @@ int main(void) {
 	// | 9600   | x  | x  |
 	// | 38400  | x  | x  |
 	// | 115200 | x  | x  |
-	// | 230400 | x  | -  |  // RX errors start being a problem at this speed
-	// | 460800 | x  | 0  |
+	// | 230400 | x  | x  |  // RX errors start being a problem at this speed
+	// | 460800 | x  | x  |
 	// | 576000 | x  | 0  |
 	// | 921600 | x  | 0  |
 }
