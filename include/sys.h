@@ -12,9 +12,12 @@ typedef struct {
 	uint32_t ID1;
 	uint32_t ID2;
 } ID;
+#if defined(STM32F4xx)
 #define UID_BASE 0x1FFF7A10UL
+#elif defined(STM32F3xx)
+#define UID_BASE 0x1FFFF7ACUL
+#endif
 #define UID ((ID *)UID_BASE)
-
 typedef void(*sys_tick_t)(void);
 
 typedef enum {

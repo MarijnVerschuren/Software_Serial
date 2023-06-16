@@ -10,28 +10,19 @@
 #include "sys.h"
 
 #include <string.h>
+#include <wchar.h>
 
 // software serial config
-//#define RECEIVE
-#ifdef RECEIVE
-#define RX_PORT GPIOB
-#define RX_PIN	10
-#define TX_PORT GPIOB
-#define TX_PIN	2
-#else
 #define RX_PORT GPIOB
 #define RX_PIN	2
 #define TX_PORT GPIOB
 #define TX_PIN	10
-#endif
-#define DBA_PORT GPIOB
-#define DBA_PIN	1
 // UART config
 //#define BAUD			921600
 //#define BAUD			576000
-#define BAUD			460800
+//#define BAUD			460800
 //#define BAUD			230400
-//#define BAUD			115200
+#define BAUD			115200
 //#define BAUD			38400
 //#define BAUD			9600
 
@@ -60,9 +51,9 @@ struct {
 	volatile uint16_t parity			: 1;
 	volatile uint16_t framing_error		: 1;
 	volatile uint16_t parity_error		: 1;
-	uint16_t _							: 4;
+	volatile uint16_t transfer_complete	: 1;
+	uint16_t _							: 3;
 } state;
-volatile uint64_t dbg_frame;
 
 
 // RX
@@ -78,7 +69,6 @@ void SUART_stop_receive() {
 	start_TIM(TIM10);
 }
 void SUART_transfer_complete(void) {
-	dbg_frame = 0;
 	if (state.framing_error) { state.framing_error = 0; return; }  // TODO: handle fe
 	if (state.parity_error) { state.parity_error = 0; return; }  // TODO: handle pe
 	for (uint8_t i = 0; i < 4; i++) {  // store wide char in buffer
@@ -86,21 +76,13 @@ void SUART_transfer_complete(void) {
 		state.buffer->i = (state.buffer->i + 1) % state.buffer->size;
 	}
 }
-#ifdef RECEIVE
-extern void EXTI15_10_IRQHandler() {
-	EXTI->PR = EXTI_PR_PR10;
-#else
 extern void EXTI2_IRQHandler() {
 	EXTI->PR = EXTI_PR_PR2;
-#endif
-	GPIO_write(DBA_PORT, DBA_PIN, 1);
 	state.started = 1;
+	state.transfer_complete = 0;
 }
 extern void TIM1_UP_TIM10_IRQHandler() {
-	// TODO: capture entire frame and process it later
-	// (or try to do it the old way which is more memory efficient)
 	TIM10->SR &= ~TIM_SR_UIF;
-	dbg_frame = (dbg_frame << 1) | GPIO_read(RX_PORT, RX_PIN);
 	if (!state.started) { return; }
 	if (state.cnt <= (settings.data_bits + 1)) {
 		if (!state.cnt) { state.parity = settings.parity; }  // reset parity before starting
@@ -119,8 +101,7 @@ extern void TIM1_UP_TIM10_IRQHandler() {
 		state.framing_error |= !GPIO_read(RX_PORT, RX_PIN);
 		state.started = state.cnt = 0;
 		state.rec_parity = state.rec_dual_stop = 0;
-
-		GPIO_write(DBA_PORT, DBA_PIN, 0);  // TODO: remove
+		state.transfer_complete = 1;
 		SUART_transfer_complete();
 	}
 }
@@ -162,8 +143,6 @@ int main(void) {
 	// GPIO
 	fconfig_GPIO(RX_PORT, RX_PIN, GPIO_input, GPIO_no_pull, GPIO_push_pull, GPIO_very_high_speed, 0);
 	fconfig_GPIO(TX_PORT, TX_PIN, GPIO_output, GPIO_no_pull, GPIO_push_pull, GPIO_very_high_speed, 0);
-	// debug pin outputting 'rx_state.started'
-	fconfig_GPIO(DBA_PORT, DBA_PIN, GPIO_output, GPIO_no_pull, GPIO_push_pull, GPIO_very_high_speed, 0);
 
 	// EXTI
 	config_EXTI(RX_PIN, RX_PORT, 1, 0);
@@ -179,70 +158,65 @@ int main(void) {
 	// software serial
 	rx_buffer = new_buffer(100 * sizeof(wchar_t));
 	settings.parity = 0;
-	settings.parity_enable = 0;
-	settings.dual_stop_bit = 0;
+	settings.parity_enable = 1;
+	settings.dual_stop_bit = 1;
 	settings.data_bits = 7;  // 8 data bits
+	//settings.data_bits = 31;  // 32 data bits
 	settings.frame_size = settings.data_bits + 1 + settings.dual_stop_bit + 1 + settings.parity_enable;
 
 	// main loop
-	#ifdef RECEIVE
 	SUART_start_receive(rx_buffer);
-	const uint8_t* menu =
-			"Options\n\r"\
-		" - D: display digital pins A0 - B15\n\r"\
-		" - S: display the system clock-speed\n\r"\
-		" - C: clear screen and exit\n\r";
+	const uint32_t* menu =
+		L"Options\n\r"\
+		L" - D: display digital pins A0 - B15\n\r"\
+		L" - S: display the system clock-speed\n\r"\
+		L" - C: clear screen and exit\n\r";
 
-	const uint8_t* hex = "0123456789ABCDEF";
-	const uint8_t* dec = "0123456789";
+	const uint32_t* hex = L"0123456789ABCDEF";
+	const uint32_t* dec = L"0123456789";
 
-	const uint8_t* digital_message = "pins A0-B15: ";
-	const uint8_t* speed_message = "system clock speed: ";
-	const uint8_t* invalid_message = "invalid option\n\r";
-	uint8_t* str_buffer = malloc(150);
+	const uint32_t* digital_message = L"pins A0-B15: ";
+	const uint32_t* speed_message = L"system clock speed: ";
+	const uint32_t* clear_message = L"\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\n\r";
+	uint32_t* str_buffer = malloc(600);  // 150 wide chars
 	uint8_t len;
 
 	uint32_t freq;
 	for (;;) {
-		if (state.transfer_complete) {
-			memset(str_buffer, 0x00, 150);
-			switch (*((char*)(rx_buffer->ptr + rx_buffer->i - 1))) {
-				case 'D':
-					len = strlen(digital_message);
-					memcpy(str_buffer, digital_message, len);
-					for (uint8_t i = 0; i < 8; i++) { str_buffer[len] = hex[GPIOA->ODR >> (28 - (i << 2)) & 0xful]; len++; }
-					str_buffer[len] = ' '; len++;
-					for (uint8_t i = 0; i < 8; i++) { str_buffer[len] = hex[GPIOB->ODR >> (28 - (i << 2)) & 0xful]; len++; }
-					str_buffer[len] = '\n'; len++; str_buffer[len] = '\r';
-					SUART_write(str_buffer, strlen(str_buffer));
-					break;
-				case 'S':
-					len = strlen(speed_message);
-					memcpy(str_buffer, speed_message, len);
-					freq = SYS_clock_frequency;
-					while (freq) { str_buffer[len] = dec[freq % 10]; len++; freq /= 10;	}
-					str_buffer[len] = '\n'; len++; str_buffer[len] = '\r';
-					SUART_write(str_buffer, strlen(str_buffer));
-					break;
-				case 'C':
-					break;
-				default:
-					SUART_write(menu, strlen(menu));
-					break;
-			}
-			//SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
-			state.transfer_complete = 0;
+		if (!state.transfer_complete) { continue; }
+		memset(str_buffer, 0x00, 150);
+		switch (*((wchar_t*)(rx_buffer->ptr + rx_buffer->i - sizeof(uint32_t)))) {
+			case L'D':
+				len = wcslen(digital_message);
+				memcpy(str_buffer, digital_message, len * sizeof(uint32_t));
+				for (uint8_t i = 0; i < 8; i++) { str_buffer[len] = hex[GPIOA->ODR >> (28 - (i << 2)) & 0xful]; len++; }
+				str_buffer[len] = ' '; len++;
+				for (uint8_t i = 0; i < 8; i++) { str_buffer[len] = hex[GPIOB->ODR >> (28 - (i << 2)) & 0xful]; len++; }
+				str_buffer[len] = '\n'; len++; str_buffer[len] = '\r';
+				SUART_write(str_buffer, wcslen(str_buffer));
+				break;
+			case L'S':
+				len = wcslen(speed_message);
+				memcpy(str_buffer, speed_message, len * sizeof(uint32_t));
+				freq = SYS_clock_frequency;
+				uint8_t num_len = 1; for (uint64_t i = 1; i < freq; i *= 10, num_len++);
+				uint8_t num_size = num_len;
+				str_buffer[len + num_len] = L'0'; do {
+					num_len--; str_buffer[len + num_len] = dec[freq % 10]; freq /= 10;
+				} while (freq); len += num_size;
+				str_buffer[len] = '\n'; len++; str_buffer[len] = '\r';
+				SUART_write(str_buffer, wcslen(str_buffer));
+				break;
+			case L'C':
+				SUART_write(clear_message, wcslen(clear_message));
+				return 0;  // exit
+			default:
+				SUART_write(menu, wcslen(menu));
+				break;
 		}
+		//SUART_write((uint8_t*)(rx_buffer->ptr + rx_buffer->i - 1), 1);
+		state.transfer_complete = 0;
 	}
-	#else
-	SUART_start_receive(rx_buffer);
-	const uint32_t* msg = L"hello world!\n";
-	const uint32_t msg_len = 14;
-	for (;;) {
-		//SUART_write(msg, 1);  // only send 'h'
-		SUART_write(msg, msg_len);
-	}
-	#endif
 
 	// | mode | blocking | interrupt |
 	// |------|----------|-----------|
