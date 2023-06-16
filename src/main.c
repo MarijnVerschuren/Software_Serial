@@ -1,6 +1,7 @@
 //
 // Created by marijn on 5/26/23.
 //
+#include "usart.h"
 #include "main.h"
 #include "base.h"
 #include "gpio.h"
@@ -51,7 +52,7 @@ struct {
 	// state
 	volatile uint32_t data;  // GCC wide-char is 4 bytes
 	// transmission state
-	volatile uint16_t cnt				: 5;
+	volatile uint16_t cnt				: 6;
 	volatile uint16_t started			: 1;
 	volatile uint16_t rec_parity		: 1;
 	volatile uint16_t rec_dual_stop		: 1;
@@ -59,9 +60,13 @@ struct {
 	volatile uint16_t parity			: 1;
 	volatile uint16_t framing_error		: 1;
 	volatile uint16_t parity_error		: 1;
-	uint16_t _							: 5;
+	uint16_t _							: 4;
 } state;
+volatile uint64_t dbg_frame;
 
+
+const uint32_t* msg = L"hello world!\n";
+const uint32_t msg_len = 14;
 
 
 // RX
@@ -77,8 +82,10 @@ void SUART_stop_receive() {
 	start_TIM(TIM10);
 }
 void SUART_transfer_complete(void) {
-	if (state.framing_error) { return; }  // TODO: handle
-	for (uint8_t i = 0; i < 4; i++) {
+	dbg_frame = 0;
+	if (state.framing_error) { state.framing_error = 0; return; }  // TODO: handle fe
+	if (state.parity_error) { state.parity_error = 0; return; }  // TODO: handle pe
+	for (uint8_t i = 0; i < 4; i++) {  // store wide char in buffer
 		((uint8_t*)state.buffer->ptr)[state.buffer->i] = ((uint8_t*)&state.data)[i];
 		state.buffer->i = (state.buffer->i + 1) % state.buffer->size;
 	}
@@ -97,8 +104,9 @@ extern void TIM1_UP_TIM10_IRQHandler() {
 	// TODO: capture entire frame and process it later
 	// (or try to do it the old way which is more memory efficient)
 	TIM10->SR &= ~TIM_SR_UIF;
+	dbg_frame = (dbg_frame << 1) | GPIO_read(RX_PORT, RX_PIN);
 	if (!state.started) { return; }
-	if (state.cnt < (settings.data_bits + 1)) {
+	if (state.cnt <= (settings.data_bits + 1)) {
 		if (!state.cnt) { state.parity = settings.parity; }  // reset parity before starting
 		state.cnt++; state.data >>= 1;
 		uint8_t d = GPIO_read(RX_PORT, RX_PIN);
@@ -164,7 +172,7 @@ int main(void) {
 	// EXTI
 	config_EXTI(RX_PIN, RX_PORT, 1, 0);
 
-	// TIMrx_psc, 1);
+	// TIM
 	tx_psc = (APB2_clock_frequency / (BAUD + 1));
 	rx_psc = (APB2_clock_frequency / (BAUD * 2 + 1));
 	config_TIM(TIM1, tx_psc, 0xffff);
@@ -173,11 +181,11 @@ int main(void) {
 	start_TIM_update_irq(TIM10);  // TIM1_UP_TIM10_IRQHandler
 
 	// software serial
-	rx_buffer = new_buffer(100);
+	rx_buffer = new_buffer(100 * sizeof(wchar_t));
 	settings.parity = 0;
-	settings.parity_enable = 1;
-	settings.dual_stop_bit = 1;
-	settings.data_bits = 8;  // 9 data bits
+	settings.parity_enable = 0;
+	settings.dual_stop_bit = 0;
+	settings.data_bits = 7;  // 8 data bits
 	settings.frame_size = settings.data_bits + 1 + settings.dual_stop_bit + 1 + settings.parity_enable;
 
 	// main loop
@@ -231,9 +239,9 @@ int main(void) {
 		}
 	}
 	#else
-	const uint32_t* msg = L"hello world!\n";
-	const uint32_t msg_len = 14;
+	SUART_start_receive(rx_buffer);
 	for (;;) {
+		//SUART_write(msg, 1);  // only send 'h'
 		SUART_write(msg, msg_len);
 	}
 	#endif
