@@ -1,0 +1,13 @@
+@startuml
+
+[*]					-->		Idle
+Idle				-->		Send_Start_Bit		: start transmission
+Send_Start_Bit		-->		Send_Data_Bit		: start bit transmitted
+Send_Data_Bit		-->		Send_Data_Bit		: until all data bits are transmitted
+Send_Data_Bit		-->		Send_Parity_Bit		: if parity is enabled
+Send_Parity_Bit		-->		Send_Stop_Bit		: end transmission
+Send_Data_Bit		-->		Send_Stop_Bit		: end transmission
+Send_Stop_Bit		-->		Send_Stop_Bit		: if dual stop bit is enabled
+Send_Stop_Bit		-->		Idle				: transmission complete
+
+@enduml

@@ -4,12 +4,12 @@
 Idle				-->		Started				: falling edge detected
 Started				-->		Receiving			: wait one bit time and start receiving data
 Receiving			-->		Receiving			: receive [data_bits] bits
-Receiving			-->		Parity_Check		: parity enable
+Receiving			-->		Parity_Check		: if parity is enabled
 Parity_Check		-->		Idle				: parity error
 Parity_Check		-->		Stop_Bit_Detection	: check for stop bit
 Receiving			-->		Stop_Bit_Detection	: check for stop bit
 Stop_Bit_Detection	-->		Idle				: framing error
-Stop_Bit_Detection	-->		Stop_Bit_Detection	: dual stop bit enabled
+Stop_Bit_Detection	-->		Stop_Bit_Detection	: if dual stop bit is enabled
 Stop_Bit_Detection	-->		Idle				: success
 
 @enduml
