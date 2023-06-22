@@ -1,0 +1,41 @@
+@startuml
+robust "UART transmission" as UT
+binary "UART wire" as UW
+concise "UART data" as UD
+
+@0
+UT is Idle
+UW is high
+
+@1
+UD is Start
+UW is low
+UT is Transmitting
+
+@2
+UD is "Data (0x57 [W])"
+
+@2
+UW is high
+@5
+UW is low
+@6
+UW is high
+@7
+UW is low
+@8
+UW is high
+@9
+UW is low
+@10
+UW is high
+UD is Parity
+
+@11
+UW is high
+UD is Stop
+
+@13
+UD is {hidden}
+UT is Idle
+@enduml
